@@ -1,0 +1,183 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(ggmosaic)
+```
+
+### Load data
+
+```{r load-data}
+load("brfss2013.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+
+This data analysis project is using Behavioral Risk Factor Surveillance System (BRFSS) dataset collected in 2013. The phone survey contacted a random sample of around 500000 people across 53 states or territories in the US. The resulting data has been weighted so that all groups are represented proportionately in the resulting dataset. Hence we can assume that we can infer conclusions for the general US population based on this dataset.
+
+Since this is an observational study and not experimental one, no random assignment was used. This means we can't make any conclusions on causality.
+
+* * *
+
+## Part 2: Research questions
+This exploratory data analysis will focus on mental health and how it correlates with different aspects of the respondents' lives, habits, and characteristics. Understanding how various aspects of a person's life are associated with mental health helps develop better strategies for coping with mental health issues.
+
+**Research quesion 1:** Are women of colour more likely to suffer from mental health issues than white men?
+
+**Research quesion 2:** Are people with poor mental health more likely to experience greater physical health issues?
+
+**Research quesion 3:** Are people who drink larger amounts of alcohol more likely to suffer from mental health issues?
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+In order to answer any question, we first need to clean the data. Since some respondents can choose not to answer a question or they might not be sure, some information can be N/A. We first make sure that we only work with specified answers that fit within a reasonable limit.
+
+```{r mental-health-clean}
+mental_health_clean <- filter(brfss2013, !is.na(menthlth) & menthlth <= 30)
+```
+
+
+
+**Research quesion 1: Are women of colour more likely to suffer from mental health issues than white men?** 
+
+We first choose females who have responded to the question fo their race with other than white. Similarly, we choose all white males in another group.
+```{r gender-race-clean}
+mental_health_women_colour <- filter(mental_health_clean, sex == "Female" & !is.na(X_race) & X_race != "White only, non-Hispanic")
+mental_health_men_white <- filter(mental_health_clean, sex == "Male" & X_race == "White only, non-Hispanic")
+```
+
+Then we compare some basic measures of central tendency (mean, median) and dispersion (IQR).
+
+```{r gender-race-statistics}
+mean(mental_health_women_colour$menthlth)
+mean(mental_health_men_white$menthlth)
+median(mental_health_women_colour$menthlth)
+median(mental_health_men_white$menthlth)
+IQR(mental_health_women_colour$menthlth)
+IQR(mental_health_men_white$menthlth)
+```
+
+Since most respondents do not suffer from mental health issues, median is 0 in both cases. However, comparing the other metrics shows that women of colour suffer more from mental health issues than white men.
+
+Boxplots make this even more noticeable.
+
+```{r gender-race-graph}
+boxplot(mental_health_women_colour$menthlth, mental_health_men_white$menthlth)
+```
+
+It is obvious most people in both groups don't suffer from mental health issues. It might be interesting then to remove any respondents who haven't experienced any such issues in the last 30 days to see what difference there is among people who feel unwell.
+
+```{r gender-race-unwell-clean}
+mental_health_women_colour_not_well <- filter(mental_health_women_colour, menthlth > 0)
+mental_health_men_white_not_well <- filter(mental_health_men_white, menthlth > 0)
+```
+
+Comparing mean, median, and IQR, it is clear that women of colour are generally feeling more unwell in terms of mental health than white men.
+
+```{r gender-race-unwell-statistics}
+mean(mental_health_women_colour_not_well$menthlth)
+mean(mental_health_men_white_not_well$menthlth)
+median(mental_health_women_colour_not_well$menthlth)
+median(mental_health_men_white_not_well$menthlth)
+IQR(mental_health_women_colour_not_well$menthlth)
+IQR(mental_health_men_white_not_well$menthlth)
+```
+
+Again, a boxplot visualises this situation clearly.
+
+```{r gender-race-unwell-graph}
+boxplot(mental_health_women_colour_not_well$menthlth, mental_health_men_white_not_well$menthlth, names = c("Women of colour", "White men"), ylab="Number of days feeling mentally unwell")
+```
+
+
+
+
+**Research quesion 2: Are people with poor mental health likely to also experience physical health issues?** 
+
+In order to answer this question, we take into account only respondents who have data on physical health over the last 30 days.
+
+```{r mental-physical-data}
+health_clean <- filter(mental_health_clean, !is.na(physhlth))
+```
+
+We can then test for correlation between the two variables.
+
+```{r mental-physical-statistics}
+cor.test(health_clean$menthlth, health_clean$physhlth, method="pearson")
+```
+
+The significance is large (p-value is very much below .05) but the correlation coefficient itself is rather small (around 35%). Considering how many things would affect health-related quality of life in any respondent, we could still say that 35% is a fairly strong positive association.
+
+There are around half a million respondents so a simple scatterplot wouldn't be very useful for visualising this data. Instead, a mosaic plot represents the trend clearly.
+
+```{r mental-physical-graph}
+health_clean$menthlth_factor <- as.factor(health_clean$menthlth)
+health_clean$physhlth_factor <- as.factor(health_clean$physhlth)
+ggplot(data = health_clean) +
+  geom_mosaic(aes(x = product(menthlth_factor), fill=physhlth_factor)) +
+  scale_x_productlist("Number of days mentally unwell") +
+  scale_y_productlist("Number of days physically unwell")
+```
+
+
+
+
+
+
+**Research quesion 3: Are people who drink larger amounts of alcohol more likely to suffer from mental health issues?**
+
+We get the approximate amount of alcohol consumed by combining data on number of times the respondent has drunk alcohol in a week/month and number of alcoholic beverages they drink on average.
+
+```{r alcohol-clean}
+map_alcohol <- function(avg, freq) ifelse(freq == 0, freq, freq * avg)
+
+# Average per month is calculated either as number of days in a month (starts with "2") 
+# or as 4 * number of days in a week (starts with "1")
+map_alcohol_per_month <- function(alc) ifelse(startsWith(toString(alc), "1"), as.integer((alc %% 100) * 4), ifelse(startsWith(toString(alc), "2"), as.integer(alc %% 100), as.integer(0)))
+
+health_alcohol <- health_clean %>% 
+  mutate(drinks_per_month = map_int(health_clean$alcday5, map_alcohol_per_month))
+
+health_alcohol <- health_alcohol %>%
+  mutate(alcohol = map2_int(health_alcohol$avedrnk2, health_alcohol$drinks_per_month, map_alcohol)) %>% 
+  dplyr::select(alcohol, avedrnk2, alcday5, menthlth, menthlth_factor) %>% 
+  filter(!is.na(alcohol) & alcohol > 0)
+```
+
+In order to find correlation between number of drinks a respondent drinks in a month and number of days they felt mentally unwell, we do a correlation test.
+
+```{r alcohol-statistics}
+cor.test(health_alcohol$menthlth,health_alcohol$alcohol, method="pearson")
+```
+
+The result show that although the correlation is significant (p-value very low), the correlation is very weak (around 1.5%). We could conclude then that there is no association between the two variables.
+
+The mosaic graph confirms this visually, with the amount of alcohol consumed in a day split into several ranges for easier understanding of the data.
+
+```{r alcohol-graph}
+health_alcohol$alcohol_factor <- as.factor(cut(health_alcohol$alcohol/30, breaks=c(0,1,10,30,80)))
+
+ggplot(data = health_alcohol) +
+  geom_mosaic(aes(x = product(menthlth_factor), fill=alcohol_factor)) +
+  scale_x_productlist("Number of days mentally unwell") +
+  scale_y_productlist("Number of drinks in a month")
+```
+
+
